@@ -5,6 +5,7 @@ const mongoose = require("mongoose");
 
 const productRoutes = require("./routes/products");
 const orderRoutes = require("./routes/orders");
+const clickRoutes = require("./routes/clicks");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,6 +21,7 @@ app.use(express.json());
 // Routes
 app.use("/api/products", productRoutes);
 app.use("/api/orders", orderRoutes);
+app.use("/api/clicks", clickRoutes);
 
 // Health check
 app.get("/api/health", (req, res) => {
