@@ -19,6 +19,15 @@ const createTransporter = () => {
  * @returns {Promise<boolean>} - Whether email was sent successfully
  */
 const sendOrderConfirmationEmail = async (order) => {
+  // Debug logging
+  console.log("=== EMAIL DEBUG ===");
+  console.log("SMTP_HOST:", process.env.SMTP_HOST || "(not set)");
+  console.log("SMTP_PORT:", process.env.SMTP_PORT || "(not set)");
+  console.log("SMTP_USER:", process.env.SMTP_USER ? "✓ set" : "✗ not set");
+  console.log("SMTP_PASS:", process.env.SMTP_PASS ? "✓ set" : "✗ not set");
+  console.log("Customer email:", order.customerEmail || "(no email)");
+  console.log("==================");
+
   // Skip if no email configured or customer has no email
   if (!process.env.SMTP_USER || !order.customerEmail) {
     console.log("Email not sent: Missing SMTP config or customer email");
@@ -27,6 +36,11 @@ const sendOrderConfirmationEmail = async (order) => {
 
   try {
     const transporter = createTransporter();
+    
+    // Verify connection
+    console.log("Verifying SMTP connection...");
+    await transporter.verify();
+    console.log("SMTP connection verified!");
 
     // Format order items for email
     const itemsList = order.items
