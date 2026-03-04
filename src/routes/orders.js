@@ -125,13 +125,26 @@ router.post("/", async (req, res) => {
     
     await order.save();
     
-    // Send confirmation emails (non-blocking)
-    sendOrderConfirmationEmail(order).catch(err => 
-      console.error("Email send error:", err)
-    );
-    sendAdminNotificationEmail(order).catch(err => 
-      console.error("Admin email send error:", err)
-    );
+    // Send confirmation emails (blocking - required for serverless)
+    try {
+      await Promise.race([
+        sendOrderConfirmationEmail(order),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Email timeout')), 8000))
+      ]);
+      console.log("Customer email sent successfully");
+    } catch (emailErr) {
+      console.error("Email send error:", emailErr.message);
+    }
+    
+    try {
+      await Promise.race([
+        sendAdminNotificationEmail(order),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Admin email timeout')), 8000))
+      ]);
+      console.log("Admin email sent successfully");
+    } catch (emailErr) {
+      console.error("Admin email send error:", emailErr.message);
+    }
     
     res.status(201).json({
       message: "Order created successfully",

@@ -10,6 +10,9 @@ const createTransporter = () => {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
+    connectionTimeout: 5000,
+    greetingTimeout: 5000,
+    socketTimeout: 5000,
   });
 };
 
@@ -37,10 +40,7 @@ const sendOrderConfirmationEmail = async (order) => {
   try {
     const transporter = createTransporter();
     
-    // Verify connection
-    console.log("Verifying SMTP connection...");
-    await transporter.verify();
-    console.log("SMTP connection verified!");
+    console.log("Sending email to:", order.customerEmail);
 
     // Format order items for email
     const itemsList = order.items
