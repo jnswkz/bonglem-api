@@ -1,6 +1,7 @@
 const express = require("express");
 const Order = require("../models/Order");
 const Product = require("../models/Product");
+const { sendOrderConfirmationEmail, sendAdminNotificationEmail } = require("../services/emailService");
 
 const router = express.Router();
 
@@ -123,6 +124,14 @@ router.post("/", async (req, res) => {
     });
     
     await order.save();
+    
+    // Send confirmation emails (non-blocking)
+    sendOrderConfirmationEmail(order).catch(err => 
+      console.error("Email send error:", err)
+    );
+    sendAdminNotificationEmail(order).catch(err => 
+      console.error("Admin email send error:", err)
+    );
     
     res.status(201).json({
       message: "Order created successfully",
