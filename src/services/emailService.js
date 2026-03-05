@@ -56,104 +56,147 @@ const sendOrderConfirmationEmail = async (order) => {
       subject: `Xác nhận đơn hàng #${order._id} - Bông Lém`,
       html: `
         <!DOCTYPE html>
-        <html>
+        <html lang="vi">
         <head>
-          <meta charset="utf-8">
-          <style>
-            body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #5C4033; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #F4A3B4, #FFB6C1); padding: 30px; text-align: center; border-radius: 16px 16px 0 0; }
-            .header h1 { color: #fff; margin: 0; font-size: 28px; text-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-            .content { background: #FDFBF7; padding: 30px; border: 1px solid #E8E4DD; border-top: none; }
-            .order-id { background: #FFF5F7; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 20px; }
-            .order-id strong { color: #F4A3B4; font-size: 18px; }
-            .section { margin-bottom: 25px; }
-            .section h3 { color: #5C4033; margin: 0 0 10px; font-size: 16px; border-bottom: 2px solid #F4A3B4; padding-bottom: 5px; }
-            .items { background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #E8E4DD; }
-            .item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed #E8E4DD; }
-            .item:last-child { border-bottom: none; }
-            .total { background: #F4A3B4; color: #fff; padding: 15px; border-radius: 8px; text-align: right; font-size: 18px; font-weight: bold; }
-            .footer { background: #5C4033; color: #fff; padding: 20px; text-align: center; border-radius: 0 0 16px 16px; }
-            .footer a { color: #F4A3B4; }
-            .info-row { display: flex; margin-bottom: 8px; }
-            .info-label { font-weight: 600; min-width: 120px; }
-          </style>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
         </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>🌸 Bông Lém 🌸</h1>
-              <p style="color: #fff; margin: 10px 0 0;">Cảm ơn bạn đã đặt hàng!</p>
-            </div>
-            
-            <div class="content">
-              <div class="order-id">
-                <p style="margin: 0;">Mã đơn hàng của bạn</p>
-                <strong>#${order._id}</strong>
-              </div>
+        <body style="margin: 0; padding: 48px 0; background-color: #e5e7eb; font-family: 'Baloo 2', 'Segoe UI', Arial, sans-serif;">
+          <table width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#e5e7eb">
+            <tr>
+              <td align="center">
+                <table width="672" border="0" cellpadding="0" cellspacing="0" bgcolor="#ffffff" style="max-width: 672px; width: 100%; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -4px rgba(0,0,0,0.1);">
+                  
+                  <!-- Header -->
+                  <tr>
+                    <td align="center" bgcolor="#f8b4c4" style="padding: 24px 32px;">
+                      <h1 style="margin: 0; font-size: 30px; font-weight: bold; color: #ffffff; line-height: 36px;">Bông Lém</h1>
+                      <p style="margin: 4px 0 0 0; font-size: 18px; color: #ffffff; line-height: 28px;">Cảm ơn bạn đã đặt hàng!</p>
+                    </td>
+                  </tr>
 
-              <div class="section">
-                <h3>📋 Thông tin khách hàng</h3>
-                <div class="info-row">
-                  <span class="info-label">Họ tên:</span>
-                  <span>${order.customerName}</span>
-                </div>
-                <div class="info-row">
-                  <span class="info-label">Số điện thoại:</span>
-                  <span>${order.customerPhone}</span>
-                </div>
-                ${order.customerEmail ? `
-                <div class="info-row">
-                  <span class="info-label">Email:</span>
-                  <span>${order.customerEmail}</span>
-                </div>
-                ` : ''}
-                <div class="info-row">
-                  <span class="info-label">Thanh toán:</span>
-                  <span>${order.paymentMethod === 'cod' ? 'Thanh toán khi nhận hàng (COD)' : 'Chuyển khoản ngân hàng'}</span>
-                </div>
-              </div>
+                  <!-- Order ID Box -->
+                  <tr>
+                    <td style="padding: 24px 32px 0 32px;">
+                      <table width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#fdf2f8" style="border-radius: 14px;">
+                        <tr>
+                          <td align="center" style="padding: 16px 24px;">
+                            <p style="margin: 0; font-size: 14px; color: #4a5565; line-height: 20px;">Mã đơn hàng của bạn</p>
+                            <p style="margin: 4px 0 0 0; font-size: 18px; font-weight: bold; color: #f8b4c4; line-height: 28px;">#${order._id}</p>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
 
-              <div class="section">
-                <h3>🛒 Chi tiết đơn hàng</h3>
-                <div class="items">
-                  ${order.items.map(item => `
-                    <div class="item">
-                      <span>${item.name} × ${item.quantity}</span>
-                      <span>${(item.price * item.quantity).toLocaleString("vi-VN")}đ</span>
-                    </div>
-                  `).join('')}
-                </div>
-              </div>
+                  <!-- Customer Information -->
+                  <tr>
+                    <td style="padding: 24px 32px 0 32px;">
+                      <h2 style="margin: 0 0 8px 0; font-size: 18px; font-weight: 600; color: #5c433b; line-height: 28px;">Thông tin khách hàng</h2>
+                      <div style="border-bottom: 1px solid #e5e7eb; margin-bottom: 16px;"></div>
+                      <table width="100%" border="0" cellpadding="0" cellspacing="0" style="font-size: 16px; color: #364153; line-height: 24px;">
+                        <tr>
+                          <td width="120" style="font-weight: bold; padding-bottom: 8px;">Họ tên:</td>
+                          <td style="padding-bottom: 8px;">${order.customerName}</td>
+                        </tr>
+                        <tr>
+                          <td style="font-weight: bold; padding-bottom: 8px;">Số điện thoại:</td>
+                          <td style="padding-bottom: 8px;">${order.customerPhone}</td>
+                        </tr>
+                        ${order.customerEmail ? `
+                        <tr>
+                          <td style="font-weight: bold; padding-bottom: 8px;">Email:</td>
+                          <td style="padding-bottom: 8px;"><a href="mailto:${order.customerEmail}" style="color: #2b7fff; text-decoration: none;">${order.customerEmail}</a></td>
+                        </tr>
+                        ` : ''}
+                        <tr>
+                          <td style="font-weight: bold;">Thanh toán:</td>
+                          <td>${order.paymentMethod === 'cod' ? 'Tiền mặt khi nhận hàng' : 'Chuyển khoản ngân hàng'}</td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
 
-              <div class="total">
-                Tổng cộng: ${order.total.toLocaleString("vi-VN")}đ
-              </div>
+                  <!-- Order Details -->
+                  <tr>
+                    <td style="padding: 24px 32px 0 32px;">
+                      <h2 style="margin: 0 0 8px 0; font-size: 18px; font-weight: 600; color: #5c433b; line-height: 28px;">Chi tiết đơn hàng</h2>
+                      <div style="border-bottom: 1px solid #e5e7eb; margin-bottom: 16px;"></div>
+                      <table width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#ffffff" style="border: 1px solid #e5e7eb; border-radius: 10px; font-size: 16px; color: #364153; line-height: 24px;">
+                        ${order.items.map((item, index) => `
+                        <tr>
+                          <td style="padding: 12px 16px; ${index < order.items.length - 1 ? 'border-bottom: 1px solid #d1d5dc;' : ''}">${item.name}</td>
+                          <td align="center" style="padding: 12px 8px; ${index < order.items.length - 1 ? 'border-bottom: 1px solid #d1d5dc;' : ''}">x${item.quantity}</td>
+                          <td align="right" style="padding: 12px 16px; ${index < order.items.length - 1 ? 'border-bottom: 1px solid #d1d5dc;' : ''}">${(item.price * item.quantity).toLocaleString("vi-VN")}đ</td>
+                        </tr>
+                        `).join('')}
+                      </table>
+                    </td>
+                  </tr>
 
-              ${order.note ? `
-              <div class="section" style="margin-top: 20px;">
-                <h3>📝 Ghi chú</h3>
-                <p style="margin: 0; background: #fff; padding: 10px; border-radius: 8px;">${order.note}</p>
-              </div>
-              ` : ''}
+                  <!-- Total -->
+                  <tr>
+                    <td style="padding: 16px 32px 0 32px;">
+                      <table width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#f8b4c4" style="border-radius: 14px;">
+                        <tr>
+                          <td align="right" style="padding: 12px 24px;">
+                            <p style="margin: 0; font-size: 20px; font-weight: bold; color: #ffffff; line-height: 28px;">Tổng cộng: ${order.total.toLocaleString("vi-VN")}đ</p>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
 
-              <div style="margin-top: 25px; padding: 15px; background: #FFF5F7; border-radius: 8px; text-align: center;">
-                <p style="margin: 0;">📍 <strong>Địa chỉ nhận hàng:</strong></p>
-                <p style="margin: 5px 0 0;">Cơ sở B, 279 Nguyễn Tri Phương, Phường Điện Hồng, Quận 10, TP. Hồ Chí Minh</p>
-              </div>
+                  ${order.note ? `
+                  <!-- Notes -->
+                  <tr>
+                    <td style="padding: 24px 32px 0 32px;">
+                      <h2 style="margin: 0 0 8px 0; font-size: 18px; font-weight: 600; color: #5c433b; line-height: 28px;">Ghi chú</h2>
+                      <div style="border-bottom: 1px solid #e5e7eb; margin-bottom: 16px;"></div>
+                      <table width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#ffffff" style="border: 1px solid #fce7f3; border-radius: 10px;">
+                        <tr>
+                          <td style="padding: 16px; font-size: 16px; color: #364153; line-height: 24px;">${order.note}</td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                  ` : ''}
 
-              <p style="margin-top: 20px; text-align: center; color: #888;">
-                Chúng mình sẽ liên hệ xác nhận đơn hàng trong thời gian sớm nhất! 💕
-              </p>
-            </div>
+                  <!-- Delivery Address -->
+                  <tr>
+                    <td style="padding: 24px 32px 0 32px;">
+                      <table width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#fdf2f8" style="border-radius: 14px;">
+                        <tr>
+                          <td align="center" style="padding: 16px 24px;">
+                            <p style="margin: 0; font-size: 16px; font-weight: bold; color: #1e2939; line-height: 24px;">Địa chỉ nhận hàng:</p>
+                            <p style="margin: 8px 0 0 0; font-size: 16px; color: #4a5565; line-height: 24px;">${order.deliveryAddress || 'UEH Cơ sở B, 279 Nguyễn Tri Phương, Phường Điện Hồng, Quận 10, TP. Hồ Chí Minh'}</p>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
 
-            <div class="footer">
-              <p style="margin: 0;">Bông Lém - Những món quà nhỏ mang niềm vui to</p>
-              <p style="margin: 10px 0 0;">
-                <a href="https://bonglem.vercel.app">bonglem.vercel.app</a>
-              </p>
-            </div>
-          </div>
+                  <!-- Confirmation Message -->
+                  <tr>
+                    <td align="center" style="padding: 24px 32px;">
+                      <p style="margin: 0; font-size: 14px; font-style: italic; color: #4a5565; line-height: 20px;">Chúng mình sẽ liên hệ xác nhận đơn hàng trong thời gian sớm nhất! 💕</p>
+                    </td>
+                  </tr>
+
+                  <!-- Footer -->
+                  <tr>
+                    <td align="center" bgcolor="#5c433b" style="padding: 24px 32px;">
+                      <p style="margin: 0; font-size: 16px; color: #ffffff; line-height: 24px;">Bông Lém - Những món quà nhỏ mang niềm vui to</p>
+                      <p style="margin: 8px 0 0 0; font-size: 16px; line-height: 24px;">
+                        <a href="https://bonglem.vercel.app" style="color: #f8b4c4; text-decoration: none;">bonglem.vercel.app</a>
+                      </p>
+                    </td>
+                  </tr>
+
+                </table>
+              </td>
+            </tr>
+          </table>
         </body>
         </html>
       `,
@@ -167,7 +210,7 @@ THÔNG TIN KHÁCH HÀNG:
 - Họ tên: ${order.customerName}
 - Số điện thoại: ${order.customerPhone}
 ${order.customerEmail ? `- Email: ${order.customerEmail}` : ''}
-- Thanh toán: ${order.paymentMethod === 'cod' ? 'COD' : 'Chuyển khoản'}
+- Thanh toán: ${order.paymentMethod === 'cod' ? 'Tiền mặt khi nhận hàng' : 'Chuyển khoản ngân hàng'}
 
 CHI TIẾT ĐƠN HÀNG:
 ${itemsList}
@@ -177,7 +220,7 @@ TỔNG CỘNG: ${order.total.toLocaleString("vi-VN")}đ
 ${order.note ? `GHI CHÚ: ${order.note}` : ''}
 
 ĐỊA CHỈ NHẬN HÀNG:
-Cơ sở B, 279 Nguyễn Tri Phương, Phường Điện Hồng, Quận 10, TP. Hồ Chí Minh
+${order.deliveryAddress || 'UEH Cơ sở B, 279 Nguyễn Tri Phương, Phường Điện Hồng, Quận 10, TP. Hồ Chí Minh'}
 
 Chúng mình sẽ liên hệ xác nhận đơn hàng trong thời gian sớm nhất!
 
