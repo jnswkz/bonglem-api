@@ -60,6 +60,7 @@ const sendOrderConfirmationEmail = async (order) => {
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@400;600;700&display=swap" rel="stylesheet">
         </head>
         <body style="margin: 0; padding: 48px 0; background-color: #e5e7eb; font-family: 'Baloo 2', 'Segoe UI', Arial, sans-serif;">
           <table width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#e5e7eb">
