@@ -35,6 +35,9 @@ const orderSchema = new mongoose.Schema({
   },
   customerEmail: {
     type: String,
+    required: true,
+    lowercase: true,
+    match: [/.+@.+\..+/, "Invalid email format"],
     trim: true
   },
   facebookLink: {
