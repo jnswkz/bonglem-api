@@ -101,11 +101,6 @@ router.post("/", async (req, res) => {
         quantity: item.quantity,
         imageUrl: product.imageUrl
       });
-      
-      // Reduce stock
-      await Product.findByIdAndUpdate(product._id, {
-        $inc: { stock: -item.quantity }
-      });
     }
     
     const total = subtotal;
@@ -157,33 +152,57 @@ router.post("/", async (req, res) => {
   }
 });
 
+// Helper to determine if a status should have stock deducted
+const isStaged = (status) => ["confirmed", "shipping", "completed"].includes(status);
+
 // PATCH /api/orders/:id - Update order status (admin)
 router.patch("/:id", async (req, res) => {
   try {
     const { status, note } = req.body;
     
-    const updateData = {};
-    if (status) updateData.status = status;
-    if (note !== undefined) updateData.note = note;
-    
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true, runValidators: true }
-    );
-    
+    const order = await Order.findById(req.params.id);
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
     
-    // If order is cancelled, restore stock
-    if (status === "cancelled") {
+    const oldStatus = order.status;
+    const newStatus = status || oldStatus;
+    
+    // Check for stock changes based on status transition
+    const wasStaged = isStaged(oldStatus);
+    const willBeStaged = isStaged(newStatus);
+    
+    if (!wasStaged && willBeStaged) {
+      // Transition from un-staged to staged: Deduct stock
+      // First validate all items have enough stock
+      for (const item of order.items) {
+        const product = await Product.findById(item.productId);
+        if (!product || product.stock < item.quantity) {
+          return res.status(400).json({ 
+            message: `Insufficient stock for ${item.name}. Available: ${product ? product.stock : 0}` 
+          });
+        }
+      }
+      
+      // All good, deduct stock
+      for (const item of order.items) {
+        await Product.findByIdAndUpdate(item.productId, {
+          $inc: { stock: -item.quantity }
+        });
+      }
+    } else if (wasStaged && !willBeStaged) {
+      // Transition from staged to un-staged (pending/cancelled): Restore stock
       for (const item of order.items) {
         await Product.findByIdAndUpdate(item.productId, {
           $inc: { stock: item.quantity }
         });
       }
     }
+    
+    if (status) order.status = status;
+    if (note !== undefined) order.note = note;
+    
+    await order.save();
     
     res.json(order);
   } catch (error) {
@@ -201,8 +220,8 @@ router.delete("/:id", async (req, res) => {
       return res.status(404).json({ message: "Order not found" });
     }
     
-    // Restore stock for non-cancelled orders
-    if (order.status !== "cancelled") {
+    // Restore stock ONLY if it was previously deducted (i.e. if order was in a staged status)
+    if (isStaged(order.status)) {
       for (const item of order.items) {
         await Product.findByIdAndUpdate(item.productId, {
           $inc: { stock: item.quantity }
