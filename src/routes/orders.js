@@ -159,9 +159,11 @@ const isStaged = (status) => ["confirmed", "shipping", "completed"].includes(sta
 router.patch("/:id", async (req, res) => {
   try {
     const { status, note } = req.body;
+    console.log(`Updating order ${req.params.id}: status=${status}, note=${note}`);
     
     const order = await Order.findById(req.params.id);
     if (!order) {
+      console.warn(`Order ${req.params.id} not found`);
       return res.status(404).json({ message: "Order not found" });
     }
     
@@ -172,14 +174,23 @@ router.patch("/:id", async (req, res) => {
     const wasStaged = isStaged(oldStatus);
     const willBeStaged = isStaged(newStatus);
     
+    console.log(`Transition: ${oldStatus} (staged: ${wasStaged}) -> ${newStatus} (staged: ${willBeStaged})`);
+
     if (!wasStaged && willBeStaged) {
+      console.log(`Deducting stock for order ${order._id}`);
       // Transition from un-staged to staged: Deduct stock
       // First validate all items have enough stock
       for (const item of order.items) {
         const product = await Product.findById(item.productId);
-        if (!product || product.stock < item.quantity) {
+        if (!product) {
+          console.error(`Product ${item.productId} not found for item ${item.name}`);
+          return res.status(400).json({ message: `Product not found: ${item.name}` });
+        }
+        
+        if (product.stock < item.quantity) {
+          console.warn(`Insufficient stock for ${item.name}: has ${product.stock}, needs ${item.quantity}`);
           return res.status(400).json({ 
-            message: `Insufficient stock for ${item.name}. Available: ${product ? product.stock : 0}` 
+            message: `Insufficient stock for ${item.name}. Available: ${product.stock}` 
           });
         }
       }
@@ -191,6 +202,7 @@ router.patch("/:id", async (req, res) => {
         });
       }
     } else if (wasStaged && !willBeStaged) {
+      console.log(`Restoring stock for order ${order._id}`);
       // Transition from staged to un-staged (pending/cancelled): Restore stock
       for (const item of order.items) {
         await Product.findByIdAndUpdate(item.productId, {
@@ -203,6 +215,7 @@ router.patch("/:id", async (req, res) => {
     if (note !== undefined) order.note = note;
     
     await order.save();
+    console.log(`Order ${order._id} updated successfully to ${order.status}`);
     
     res.json(order);
   } catch (error) {
@@ -220,8 +233,12 @@ router.delete("/:id", async (req, res) => {
       return res.status(404).json({ message: "Order not found" });
     }
     
+    const status = order.status;
+    console.log(`Deleting order ${order._id} with status ${status}`);
+
     // Restore stock ONLY if it was previously deducted (i.e. if order was in a staged status)
-    if (isStaged(order.status)) {
+    if (isStaged(status)) {
+      console.log(`Restoring stock for deleted order ${order._id}`);
       for (const item of order.items) {
         await Product.findByIdAndUpdate(item.productId, {
           $inc: { stock: item.quantity }
@@ -230,6 +247,7 @@ router.delete("/:id", async (req, res) => {
     }
     
     await Order.findByIdAndDelete(req.params.id);
+    console.log(`Order ${order._id} deleted successfully`);
     
     res.json({ message: "Order deleted successfully" });
   } catch (error) {
