@@ -1,9 +1,68 @@
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const Order = require("../models/Order");
 const Product = require("../models/Product");
 const { sendOrderConfirmationEmail, sendAdminNotificationEmail } = require("../services/emailService");
 
 const router = express.Router();
+
+// Rate limiter for order creation - max 5 orders per IP per 15 minutes
+const orderRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5,
+  message: { message: "Too many orders from this IP, please try again later" },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    // Use X-Forwarded-For for Vercel/proxied requests
+    return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
+           req.headers['x-real-ip'] || 
+           req.ip || 
+           req.connection.remoteAddress;
+  }
+});
+
+// Spam detection helper
+async function checkSpam(customerPhone, customerEmail) {
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  
+  // Check recent orders from same phone (max 3 per hour)
+  const recentByPhone = await Order.countDocuments({
+    customerPhone,
+    createdAt: { $gte: oneHourAgo }
+  });
+  
+  if (recentByPhone >= 3) {
+    return { isSpam: true, reason: "Too many orders from this phone number. Please wait before ordering again." };
+  }
+  
+  // Check recent orders from same email (max 3 per hour)
+  const recentByEmail = await Order.countDocuments({
+    customerEmail,
+    createdAt: { $gte: oneHourAgo }
+  });
+  
+  if (recentByEmail >= 3) {
+    return { isSpam: true, reason: "Too many orders from this email. Please wait before ordering again." };
+  }
+  
+  // Block suspicious email patterns
+  const suspiciousPatterns = [
+    /leagueoflegend/i,
+    /test@test/i,
+    /spam@/i,
+    /fake@/i,
+    /asdf@/i
+  ];
+  
+  for (const pattern of suspiciousPatterns) {
+    if (pattern.test(customerEmail)) {
+      return { isSpam: true, reason: "Invalid email address" };
+    }
+  }
+  
+  return { isSpam: false };
+}
 
 // GET /api/orders - List all orders (admin)
 router.get("/", async (req, res) => {
@@ -48,7 +107,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // POST /api/orders - Create new order (from frontend checkout)
-router.post("/", async (req, res) => {
+router.post("/", orderRateLimiter, async (req, res) => {
   try {
     const { 
       customerName, 
@@ -57,14 +116,32 @@ router.post("/", async (req, res) => {
       facebookLink, 
       items, 
       note,
-      paymentMethod = "cod"
+      paymentMethod = "cod",
+      _hp // Honeypot field - should be empty
     } = req.body;
+    
+    // Honeypot check - bots will fill this hidden field
+    if (_hp) {
+      console.log("[Spam] Honeypot triggered");
+      // Return success to fool bots, but don't create order
+      return res.status(201).json({
+        message: "Order created successfully",
+        orderId: "fake-" + Date.now()
+      });
+    }
     
     // Validate required fields
     if (!customerName || !customerPhone || !customerEmail || !String(customerEmail).trim()) {
       return res.status(400).json({ 
         message: "Missing required fields: customerName, customerPhone, customerEmail" 
       });
+    }
+    
+    // Check for spam
+    const spamCheck = await checkSpam(customerPhone.trim(), customerEmail.trim().toLowerCase());
+    if (spamCheck.isSpam) {
+      console.log(`[Spam] Blocked: ${spamCheck.reason} - ${customerPhone} / ${customerEmail}`);
+      return res.status(429).json({ message: spamCheck.reason });
     }
     
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -253,6 +330,54 @@ router.delete("/:id", async (req, res) => {
   } catch (error) {
     console.error("Error deleting order:", error);
     res.status(500).json({ message: "Failed to delete order" });
+  }
+});
+
+// DELETE /api/orders/bulk/spam - Delete spam orders by pattern (admin)
+router.delete("/bulk/spam", async (req, res) => {
+  try {
+    const { customerName, customerEmail, dryRun = false } = req.body;
+    
+    if (!customerName && !customerEmail) {
+      return res.status(400).json({ 
+        message: "Provide 'customerName' or 'customerEmail' pattern to match spam orders" 
+      });
+    }
+    
+    const filter = { status: "pending" }; // Only delete pending orders for safety
+    
+    if (customerName) {
+      filter.customerName = { $regex: customerName, $options: "i" };
+    }
+    if (customerEmail) {
+      filter.customerEmail = { $regex: customerEmail, $options: "i" };
+    }
+    
+    const matchingOrders = await Order.find(filter);
+    
+    if (dryRun) {
+      return res.json({
+        message: `Dry run: Would delete ${matchingOrders.length} orders`,
+        count: matchingOrders.length,
+        sample: matchingOrders.slice(0, 5).map(o => ({
+          id: o._id,
+          customerName: o.customerName,
+          customerEmail: o.customerEmail
+        }))
+      });
+    }
+    
+    const result = await Order.deleteMany(filter);
+    
+    console.log(`[Spam Cleanup] Deleted ${result.deletedCount} orders matching pattern`);
+    
+    res.json({
+      message: `Deleted ${result.deletedCount} spam orders`,
+      deletedCount: result.deletedCount
+    });
+  } catch (error) {
+    console.error("Error deleting spam orders:", error);
+    res.status(500).json({ message: "Failed to delete spam orders" });
   }
 });
 
