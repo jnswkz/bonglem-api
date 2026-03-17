@@ -78,6 +78,35 @@ const orderSchema = new mongoose.Schema({
     type: String,
     enum: ["cod", "bank_transfer"],
     default: "cod"
+  },
+  paymentStatus: {
+    type: String,
+    enum: ["unpaid", "pending", "paid", "cancelled", "expired", "failed"],
+    default: "unpaid"
+  },
+  customerConfirmationEmailSentAt: {
+    type: Date,
+    default: null
+  },
+  payos: {
+    orderCode: Number,
+    paymentLinkId: String,
+    checkoutUrl: String,
+    qrCode: String,
+    status: {
+      type: String,
+      enum: ["PENDING", "CANCELLED", "UNDERPAID", "PAID", "EXPIRED", "PROCESSING", "FAILED"],
+      default: null
+    },
+    expiredAt: Number,
+    amountPaid: {
+      type: Number,
+      default: 0
+    },
+    paidAt: Date,
+    webhookReceivedAt: Date,
+    lastWebhookCode: String,
+    lastWebhookDesc: String
   }
 }, {
   timestamps: true
@@ -86,5 +115,6 @@ const orderSchema = new mongoose.Schema({
 // Index for faster queries
 orderSchema.index({ status: 1, createdAt: -1 });
 orderSchema.index({ customerPhone: 1 });
+orderSchema.index({ "payos.orderCode": 1 }, { sparse: true });
 
 module.exports = mongoose.model("Order", orderSchema);

@@ -2,89 +2,333 @@ const express = require("express");
 const rateLimit = require("express-rate-limit");
 const Order = require("../models/Order");
 const Product = require("../models/Product");
-const { sendOrderConfirmationEmail, sendAdminNotificationEmail } = require("../services/emailService");
+const PaymentSession = require("../models/PaymentSession");
+const {
+  sendOrderConfirmationEmail,
+  sendAdminNotificationEmail,
+} = require("../services/emailService");
+const {
+  hasPayOSConfig,
+  createPaymentLinkForSession,
+  getPaymentLink,
+  verifyWebhookData,
+  mapPayOSStatusToPaymentStatus,
+} = require("../services/payosService");
 
 const router = express.Router();
 
-// Rate limiter for order creation - max 5 orders per IP per 15 minutes
 const orderRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 5,
   message: { message: "Too many orders from this IP, please try again later" },
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => {
-    // Use X-Forwarded-For for Vercel/proxied requests
-    return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
-           req.headers['x-real-ip'] || 
-           req.ip || 
-           req.connection.remoteAddress;
-  }
+  keyGenerator: (req) =>
+    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    req.headers["x-real-ip"] ||
+    req.ip ||
+    req.connection.remoteAddress,
 });
 
-// Spam detection helper
 async function checkSpam(customerPhone, customerEmail) {
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-  
-  // Check recent orders from same phone (max 3 per hour)
-  const recentByPhone = await Order.countDocuments({
-    customerPhone,
-    createdAt: { $gte: oneHourAgo }
-  });
-  
-  if (recentByPhone >= 3) {
-    return { isSpam: true, reason: "Too many orders from this phone number. Please wait before ordering again." };
+
+  const [recentOrdersByPhone, recentSessionsByPhone] = await Promise.all([
+    Order.countDocuments({
+      customerPhone,
+      createdAt: { $gte: oneHourAgo },
+    }),
+    PaymentSession.countDocuments({
+      customerPhone,
+      createdAt: { $gte: oneHourAgo },
+    }),
+  ]);
+
+  if (recentOrdersByPhone + recentSessionsByPhone >= 3) {
+    return {
+      isSpam: true,
+      reason: "Too many orders from this phone number. Please wait before ordering again.",
+    };
   }
-  
-  // Check recent orders from same email (max 3 per hour)
-  const recentByEmail = await Order.countDocuments({
-    customerEmail,
-    createdAt: { $gte: oneHourAgo }
-  });
-  
-  if (recentByEmail >= 3) {
-    return { isSpam: true, reason: "Too many orders from this email. Please wait before ordering again." };
+
+  const [recentOrdersByEmail, recentSessionsByEmail] = await Promise.all([
+    Order.countDocuments({
+      customerEmail,
+      createdAt: { $gte: oneHourAgo },
+    }),
+    PaymentSession.countDocuments({
+      customerEmail,
+      createdAt: { $gte: oneHourAgo },
+    }),
+  ]);
+
+  if (recentOrdersByEmail + recentSessionsByEmail >= 3) {
+    return {
+      isSpam: true,
+      reason: "Too many orders from this email. Please wait before ordering again.",
+    };
   }
-  
-  // Block suspicious email patterns
-  const suspiciousPatterns = [
-    /leagueoflegend/i,
-    /test@test/i,
-    /spam@/i,
-    /fake@/i,
-    /asdf@/i
-  ];
-  
+
+  const suspiciousPatterns = [/leagueoflegend/i, /test@test/i, /spam@/i, /fake@/i, /asdf@/i];
+
   for (const pattern of suspiciousPatterns) {
     if (pattern.test(customerEmail)) {
       return { isSpam: true, reason: "Invalid email address" };
     }
   }
-  
+
   return { isSpam: false };
 }
 
-// GET /api/orders - List all orders (admin)
+async function sendCustomerConfirmationIfNeeded(order) {
+  if (order.customerConfirmationEmailSentAt) {
+    return false;
+  }
+
+  try {
+    const sent = await Promise.race([
+      sendOrderConfirmationEmail(order),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Email timeout")), 8000)),
+    ]);
+
+    if (sent) {
+      order.customerConfirmationEmailSentAt = new Date();
+      await order.save();
+    }
+
+    return sent;
+  } catch (error) {
+    console.error("Email send error:", error.message);
+    return false;
+  }
+}
+
+async function sendAdminNotificationSafely(order) {
+  try {
+    await Promise.race([
+      sendAdminNotificationEmail(order),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Admin email timeout")), 8000)
+      ),
+    ]);
+  } catch (error) {
+    console.error("Admin email send error:", error.message);
+  }
+}
+
+async function buildOrderItems(items) {
+  const orderItems = [];
+  let subtotal = 0;
+
+  for (const item of items) {
+    const product = await Product.findById(item.productId);
+    if (!product) {
+      throw new Error(`Product not found: ${item.productId}`);
+    }
+
+    if (product.status !== "active") {
+      throw new Error(`Product not available: ${product.name}`);
+    }
+
+    if (product.stock < item.quantity) {
+      throw new Error(`Insufficient stock for ${product.name}. Available: ${product.stock}`);
+    }
+
+    subtotal += product.price * item.quantity;
+
+    orderItems.push({
+      productId: product._id,
+      name: product.name,
+      price: product.price,
+      quantity: item.quantity,
+      imageUrl: product.imageUrl,
+    });
+  }
+
+  return { orderItems, subtotal, total: subtotal };
+}
+
+function mapPaymentInfo(source) {
+  return {
+    status: source.paymentStatus,
+    checkoutUrl: source.payos?.checkoutUrl || null,
+    qrCode: source.payos?.qrCode || null,
+    paymentLinkId: source.payos?.paymentLinkId || null,
+    orderCode: source.payos?.orderCode || null,
+  };
+}
+
+function getOrderResponse(order) {
+  return {
+    message: "Order created successfully",
+    sessionId: null,
+    orderId: order._id,
+    order,
+    payment: order.paymentMethod === "bank_transfer" ? mapPaymentInfo(order) : null,
+  };
+}
+
+function getSessionResponse(session) {
+  return {
+    message: "Payment session created successfully",
+    sessionId: session._id,
+    orderId: null,
+    order: null,
+    payment: mapPaymentInfo(session),
+  };
+}
+
+function updateSessionFromPaymentLink(session, paymentLink, webhookData) {
+  const payosData = session.payos || {};
+  const nextStatus = paymentLink?.status || payosData.status || "PENDING";
+
+  session.payos = {
+    ...payosData,
+    orderCode: payosData.orderCode || paymentLink?.orderCode,
+    paymentLinkId: paymentLink?.id || payosData.paymentLinkId,
+    checkoutUrl: payosData.checkoutUrl,
+    qrCode: payosData.qrCode,
+    status: nextStatus,
+    expiredAt:
+      typeof paymentLink?.expiredAt === "number"
+        ? paymentLink.expiredAt
+        : payosData.expiredAt || null,
+    amountPaid:
+      typeof paymentLink?.amountPaid === "number"
+        ? paymentLink.amountPaid
+        : payosData.amountPaid || 0,
+    paidAt: nextStatus === "PAID" ? payosData.paidAt || new Date() : payosData.paidAt || null,
+    webhookReceivedAt: webhookData ? new Date() : payosData.webhookReceivedAt || null,
+    lastWebhookCode: webhookData?.code || payosData.lastWebhookCode,
+    lastWebhookDesc: webhookData?.desc || payosData.lastWebhookDesc,
+  };
+
+  session.paymentStatus = mapPayOSStatusToPaymentStatus(nextStatus);
+}
+
+async function createOrderFromPaidSession(session) {
+  if (session.createdOrderId) {
+    return Order.findById(session.createdOrderId);
+  }
+
+  const order = new Order({
+    customerName: session.customerName,
+    customerPhone: session.customerPhone,
+    customerEmail: session.customerEmail,
+    facebookLink: session.facebookLink,
+    items: session.items,
+    subtotal: session.subtotal,
+    total: session.total,
+    note: session.note,
+    paymentMethod: "bank_transfer",
+    paymentStatus: "paid",
+    status: "pending",
+    payos: session.payos,
+  });
+
+  await order.save();
+
+  session.createdOrderId = order._id;
+  session.orderCreatedAt = new Date();
+  await session.save();
+
+  await sendCustomerConfirmationIfNeeded(order);
+  await sendAdminNotificationSafely(order);
+
+  return order;
+}
+
+async function syncPaymentSessionStatus(session, webhookData) {
+  if (!session?.payos?.orderCode || !hasPayOSConfig()) {
+    return { session, order: null };
+  }
+
+  const paymentLink = await getPaymentLink(session.payos.orderCode);
+  updateSessionFromPaymentLink(session, paymentLink, webhookData);
+  await session.save();
+
+  let order = null;
+  if (session.paymentStatus === "paid") {
+    order = await createOrderFromPaidSession(session);
+  }
+
+  return { session, order };
+}
+
+async function getPaymentSessionPayload(sessionId, syncPayment = false) {
+  const session = await PaymentSession.findById(sessionId);
+  if (!session) {
+    return null;
+  }
+
+  let order = session.createdOrderId ? await Order.findById(session.createdOrderId) : null;
+
+  if (syncPayment) {
+    const synced = await syncPaymentSessionStatus(session);
+    order = synced.order || order;
+  }
+
+  return {
+    sessionId: session._id,
+    paymentStatus: session.paymentStatus,
+    orderId: session.createdOrderId || null,
+    order,
+    payment: mapPaymentInfo(session),
+  };
+}
+
+router.post("/payos/webhook", async (req, res) => {
+  try {
+    const webhookData = await verifyWebhookData(req.body);
+    const session = await PaymentSession.findOne({ "payos.orderCode": webhookData.orderCode });
+
+    if (!session) {
+      console.warn(`payOS session not found for orderCode ${webhookData.orderCode}`);
+      return res.json({ error: 0, message: "ok" });
+    }
+
+    await syncPaymentSessionStatus(session, webhookData);
+    res.json({ error: 0, message: "ok" });
+  } catch (error) {
+    console.error("Error processing payOS webhook:", error);
+    res.status(400).json({ error: -1, message: error.message || "Webhook failed" });
+  }
+});
+
+router.get("/payment-session/:id", async (req, res) => {
+  try {
+    const payload = await getPaymentSessionPayload(req.params.id, req.query.syncPayment === "true");
+    if (!payload) {
+      return res.status(404).json({ message: "Payment session not found" });
+    }
+
+    res.json(payload);
+  } catch (error) {
+    console.error("Error fetching payment session:", error);
+    res.status(500).json({ message: "Failed to fetch payment session" });
+  }
+});
+
 router.get("/", async (req, res) => {
   try {
     const { status, limit = 50, skip = 0 } = req.query;
-    
+
     const filter = {};
     if (status && status !== "all") {
       filter.status = status;
     }
-    
+
     const orders = await Order.find(filter)
       .sort({ createdAt: -1 })
       .skip(Number(skip))
       .limit(Number(limit));
-    
+
     const total = await Order.countDocuments(filter);
-    
+
     res.json({
       items: orders,
       total,
-      hasMore: Number(skip) + orders.length < total
+      hasMore: Number(skip) + orders.length < total,
     });
   } catch (error) {
     console.error("Error fetching orders:", error);
@@ -92,13 +336,13 @@ router.get("/", async (req, res) => {
   }
 });
 
-// GET /api/orders/:id - Get single order
 router.get("/:id", async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
+
     res.json(order);
   } catch (error) {
     console.error("Error fetching order:", error);
@@ -106,82 +350,90 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// POST /api/orders - Create new order (from frontend checkout)
 router.post("/", orderRateLimiter, async (req, res) => {
   try {
-    const { 
-      customerName, 
-      customerPhone, 
+    const {
+      customerName,
+      customerPhone,
       customerEmail,
-      facebookLink, 
-      items, 
+      facebookLink,
+      items,
       note,
       paymentMethod = "cod",
-      _hp // Honeypot field - should be empty
+      _hp,
     } = req.body;
-    
-    // Honeypot check - bots will fill this hidden field
+
+    const normalizedPaymentMethod = String(paymentMethod || "cod").trim();
+
     if (_hp) {
       console.log("[Spam] Honeypot triggered");
-      // Return success to fool bots, but don't create order
       return res.status(201).json({
         message: "Order created successfully",
-        orderId: "fake-" + Date.now()
+        orderId: "fake-" + Date.now(),
       });
     }
-    
-    // Validate required fields
+
     if (!customerName || !customerPhone || !customerEmail || !String(customerEmail).trim()) {
-      return res.status(400).json({ 
-        message: "Missing required fields: customerName, customerPhone, customerEmail" 
+      return res.status(400).json({
+        message: "Missing required fields: customerName, customerPhone, customerEmail",
       });
     }
-    
-    // Check for spam
-    const spamCheck = await checkSpam(customerPhone.trim(), customerEmail.trim().toLowerCase());
+
+    if (!["cod", "bank_transfer"].includes(normalizedPaymentMethod)) {
+      return res.status(400).json({ message: "Invalid payment method" });
+    }
+
+    if (normalizedPaymentMethod === "bank_transfer" && !hasPayOSConfig()) {
+      return res.status(500).json({ message: "payOS configuration is missing" });
+    }
+
+    const spamCheck = await checkSpam(
+      customerPhone.trim(),
+      customerEmail.trim().toLowerCase()
+    );
+
     if (spamCheck.isSpam) {
       console.log(`[Spam] Blocked: ${spamCheck.reason} - ${customerPhone} / ${customerEmail}`);
       return res.status(429).json({ message: spamCheck.reason });
     }
-    
+
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ message: "Order must have at least one item" });
     }
-    
-    // Validate products exist and calculate totals
-    const orderItems = [];
-    let subtotal = 0;
-    
-    for (const item of items) {
-      const product = await Product.findById(item.productId);
-      if (!product) {
-        return res.status(400).json({ message: `Product not found: ${item.productId}` });
-      }
-      
-      if (product.status !== "active") {
-        return res.status(400).json({ message: `Product not available: ${product.name}` });
-      }
-      
-      if (product.stock < item.quantity) {
-        return res.status(400).json({ 
-          message: `Insufficient stock for ${product.name}. Available: ${product.stock}` 
-        });
-      }
-      
-      const itemTotal = product.price * item.quantity;
-      subtotal += itemTotal;
-      
-      orderItems.push({
-        productId: product._id,
-        name: product.name,
-        price: product.price,
-        quantity: item.quantity,
-        imageUrl: product.imageUrl
+
+    const { orderItems, subtotal, total } = await buildOrderItems(items);
+
+    if (normalizedPaymentMethod === "bank_transfer") {
+      const session = new PaymentSession({
+        customerName,
+        customerPhone,
+        customerEmail,
+        facebookLink,
+        items: orderItems,
+        subtotal,
+        total,
+        note,
+        paymentMethod: "bank_transfer",
+        paymentStatus: "pending",
       });
+
+      const { orderCode, paymentLink } = await createPaymentLinkForSession(session);
+
+      session.payos = {
+        orderCode,
+        paymentLinkId: paymentLink.paymentLinkId,
+        checkoutUrl: paymentLink.checkoutUrl,
+        qrCode: paymentLink.qrCode,
+        status: paymentLink.status,
+        expiredAt: paymentLink.expiredAt || null,
+        amountPaid: 0,
+      };
+      session.paymentStatus = mapPayOSStatusToPaymentStatus(paymentLink.status);
+
+      await session.save();
+      return res.status(201).json(getSessionResponse(session));
     }
-    
-    const total = subtotal;
-    
+
     const order = new Order({
       customerName,
       customerPhone,
@@ -191,109 +443,70 @@ router.post("/", orderRateLimiter, async (req, res) => {
       subtotal,
       total,
       note,
-      paymentMethod,
-      status: "pending"
+      paymentMethod: "cod",
+      paymentStatus: "unpaid",
+      status: "pending",
     });
-    
+
     await order.save();
-    
-    // Send confirmation emails (blocking - required for serverless)
-    try {
-      await Promise.race([
-        sendOrderConfirmationEmail(order),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Email timeout')), 8000))
-      ]);
-      console.log("Customer email sent successfully");
-    } catch (emailErr) {
-      console.error("Email send error:", emailErr.message);
-    }
-    
-    try {
-      await Promise.race([
-        sendAdminNotificationEmail(order),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Admin email timeout')), 8000))
-      ]);
-      console.log("Admin email sent successfully");
-    } catch (emailErr) {
-      console.error("Admin email send error:", emailErr.message);
-    }
-    
-    res.status(201).json({
-      message: "Order created successfully",
-      orderId: order._id,
-      order
-    });
+    await sendCustomerConfirmationIfNeeded(order);
+    await sendAdminNotificationSafely(order);
+
+    res.status(201).json(getOrderResponse(order));
   } catch (error) {
     console.error("Error creating order:", error);
     res.status(400).json({ message: error.message });
   }
 });
 
-// Helper to determine if a status should have stock deducted
 const isStaged = (status) => ["confirmed", "shipping", "completed"].includes(status);
 
-// PATCH /api/orders/:id - Update order status (admin)
 router.patch("/:id", async (req, res) => {
   try {
     const { status, note } = req.body;
     console.log(`Updating order ${req.params.id}: status=${status}, note=${note}`);
-    
+
     const order = await Order.findById(req.params.id);
     if (!order) {
-      console.warn(`Order ${req.params.id} not found`);
       return res.status(404).json({ message: "Order not found" });
     }
-    
+
     const oldStatus = order.status;
     const newStatus = status || oldStatus;
-    
-    // Check for stock changes based on status transition
     const wasStaged = isStaged(oldStatus);
     const willBeStaged = isStaged(newStatus);
-    
-    console.log(`Transition: ${oldStatus} (staged: ${wasStaged}) -> ${newStatus} (staged: ${willBeStaged})`);
 
     if (!wasStaged && willBeStaged) {
-      console.log(`Deducting stock for order ${order._id}`);
-      // Transition from un-staged to staged: Deduct stock
-      // First validate all items have enough stock
       for (const item of order.items) {
         const product = await Product.findById(item.productId);
         if (!product) {
-          console.error(`Product ${item.productId} not found for item ${item.name}`);
           return res.status(400).json({ message: `Product not found: ${item.name}` });
         }
-        
+
         if (product.stock < item.quantity) {
-          console.warn(`Insufficient stock for ${item.name}: has ${product.stock}, needs ${item.quantity}`);
-          return res.status(400).json({ 
-            message: `Insufficient stock for ${item.name}. Available: ${product.stock}` 
+          return res.status(400).json({
+            message: `Insufficient stock for ${item.name}. Available: ${product.stock}`,
           });
         }
       }
-      
-      // All good, deduct stock
+
       for (const item of order.items) {
         await Product.findByIdAndUpdate(item.productId, {
-          $inc: { stock: -item.quantity }
+          $inc: { stock: -item.quantity },
         });
       }
     } else if (wasStaged && !willBeStaged) {
-      console.log(`Restoring stock for order ${order._id}`);
-      // Transition from staged to un-staged (pending/cancelled): Restore stock
       for (const item of order.items) {
         await Product.findByIdAndUpdate(item.productId, {
-          $inc: { stock: item.quantity }
+          $inc: { stock: item.quantity },
         });
       }
     }
-    
+
     if (status) order.status = status;
     if (note !== undefined) order.note = note;
-    
+
     await order.save();
-    console.log(`Order ${order._id} updated successfully to ${order.status}`);
-    
     res.json(order);
   } catch (error) {
     console.error("Error updating order:", error);
@@ -301,31 +514,23 @@ router.patch("/:id", async (req, res) => {
   }
 });
 
-// DELETE /api/orders/:id - Delete order (admin)
 router.delete("/:id", async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
-    
+
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
-    
-    const status = order.status;
-    console.log(`Deleting order ${order._id} with status ${status}`);
 
-    // Restore stock ONLY if it was previously deducted (i.e. if order was in a staged status)
-    if (isStaged(status)) {
-      console.log(`Restoring stock for deleted order ${order._id}`);
+    if (isStaged(order.status)) {
       for (const item of order.items) {
         await Product.findByIdAndUpdate(item.productId, {
-          $inc: { stock: item.quantity }
+          $inc: { stock: item.quantity },
         });
       }
     }
-    
+
     await Order.findByIdAndDelete(req.params.id);
-    console.log(`Order ${order._id} deleted successfully`);
-    
     res.json({ message: "Order deleted successfully" });
   } catch (error) {
     console.error("Error deleting order:", error);
@@ -333,47 +538,44 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// DELETE /api/orders/bulk/spam - Delete spam orders by pattern (admin)
 router.delete("/bulk/spam", async (req, res) => {
   try {
     const { customerName, customerEmail, dryRun = false } = req.body;
-    
+
     if (!customerName && !customerEmail) {
-      return res.status(400).json({ 
-        message: "Provide 'customerName' or 'customerEmail' pattern to match spam orders" 
+      return res.status(400).json({
+        message: "Provide 'customerName' or 'customerEmail' pattern to match spam orders",
       });
     }
-    
-    const filter = { status: "pending" }; // Only delete pending orders for safety
-    
+
+    const filter = { status: "pending" };
+
     if (customerName) {
       filter.customerName = { $regex: customerName, $options: "i" };
     }
     if (customerEmail) {
       filter.customerEmail = { $regex: customerEmail, $options: "i" };
     }
-    
+
     const matchingOrders = await Order.find(filter);
-    
+
     if (dryRun) {
       return res.json({
         message: `Dry run: Would delete ${matchingOrders.length} orders`,
         count: matchingOrders.length,
-        sample: matchingOrders.slice(0, 5).map(o => ({
-          id: o._id,
-          customerName: o.customerName,
-          customerEmail: o.customerEmail
-        }))
+        sample: matchingOrders.slice(0, 5).map((order) => ({
+          id: order._id,
+          customerName: order.customerName,
+          customerEmail: order.customerEmail,
+        })),
       });
     }
-    
+
     const result = await Order.deleteMany(filter);
-    
-    console.log(`[Spam Cleanup] Deleted ${result.deletedCount} orders matching pattern`);
-    
+
     res.json({
       message: `Deleted ${result.deletedCount} spam orders`,
-      deletedCount: result.deletedCount
+      deletedCount: result.deletedCount,
     });
   } catch (error) {
     console.error("Error deleting spam orders:", error);
