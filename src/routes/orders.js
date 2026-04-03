@@ -463,8 +463,17 @@ const isStaged = (status) => ["confirmed", "shipping", "completed"].includes(sta
 
 router.patch("/:id", async (req, res) => {
   try {
-    const { status, note } = req.body;
-    console.log(`Updating order ${req.params.id}: status=${status}, note=${note}`);
+    const {
+      status,
+      note,
+      customerName,
+      customerPhone,
+      customerEmail,
+      facebookLink,
+    } = req.body;
+    console.log(
+      `Updating order ${req.params.id}: status=${status}, customerName=${customerName}, customerPhone=${customerPhone}, customerEmail=${customerEmail}`
+    );
 
     const order = await Order.findById(req.params.id);
     if (!order) {
@@ -505,6 +514,14 @@ router.patch("/:id", async (req, res) => {
 
     if (status) order.status = status;
     if (note !== undefined) order.note = note;
+    if (customerName !== undefined) order.customerName = String(customerName).trim();
+    if (customerPhone !== undefined) order.customerPhone = String(customerPhone).trim();
+    if (customerEmail !== undefined) {
+      order.customerEmail = String(customerEmail).trim().toLowerCase();
+    }
+    if (facebookLink !== undefined) {
+      order.facebookLink = String(facebookLink || "").trim();
+    }
 
     await order.save();
     res.json(order);
