@@ -46,7 +46,7 @@ const orderSchema = new mongoose.Schema({
   },
   orderKind: {
     type: String,
-    enum: ["product", "customer"],
+    enum: ["product", "customer", "manual"],
     default: "product"
   },
   items: {
@@ -54,7 +54,7 @@ const orderSchema = new mongoose.Schema({
     required: true,
     validate: {
       validator: function(v) {
-        if (this.orderKind === "customer") {
+        if (["customer", "manual"].includes(this.orderKind)) {
           return Array.isArray(v);
         }
 

@@ -277,6 +277,18 @@ async function getPaymentSessionPayload(sessionId, syncPayment = false) {
   };
 }
 
+function deriveManualPaymentStatus(status, total) {
+  if (status === "cancelled") {
+    return "cancelled";
+  }
+
+  if (["confirmed", "shipping", "completed"].includes(status) || total === 0) {
+    return "paid";
+  }
+
+  return "unpaid";
+}
+
 router.post("/payos/webhook", async (req, res) => {
   try {
     const webhookData = await verifyWebhookData(req.body);
@@ -350,7 +362,7 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-router.post("/manual/customer", async (req, res) => {
+async function createManualOrder(req, res) {
   try {
     const {
       customerName,
@@ -358,11 +370,18 @@ router.post("/manual/customer", async (req, res) => {
       customerEmail,
       facebookLink,
       note,
+      total = 0,
+      status = "completed",
+      paymentMethod = "cod",
+      orderDate,
     } = req.body || {};
 
     const normalizedName = String(customerName || "").trim();
     const normalizedPhone = String(customerPhone || "").trim();
     const normalizedEmail = String(customerEmail || "").trim().toLowerCase();
+    const normalizedStatus = String(status || "completed").trim();
+    const normalizedPaymentMethod = String(paymentMethod || "cod").trim();
+    const numericTotal = Number(total ?? 0);
 
     if (!normalizedName || !normalizedPhone || !normalizedEmail) {
       return res.status(400).json({
@@ -370,28 +389,58 @@ router.post("/manual/customer", async (req, res) => {
       });
     }
 
+    if (!Number.isFinite(numericTotal) || numericTotal < 0) {
+      return res.status(400).json({ message: "Total must be a number greater than or equal to 0" });
+    }
+
+    if (!["pending", "confirmed", "shipping", "completed", "cancelled"].includes(normalizedStatus)) {
+      return res.status(400).json({ message: "Invalid status" });
+    }
+
+    if (!["cod", "bank_transfer"].includes(normalizedPaymentMethod)) {
+      return res.status(400).json({ message: "Invalid payment method" });
+    }
+
+    let manualOrderDate = null;
+    if (orderDate) {
+      manualOrderDate = new Date(orderDate);
+      if (Number.isNaN(manualOrderDate.getTime())) {
+        return res.status(400).json({ message: "Invalid order date" });
+      }
+
+      if (manualOrderDate > new Date()) {
+        return res.status(400).json({ message: "Order date cannot be in the future" });
+      }
+    }
+
     const order = new Order({
       customerName: normalizedName,
       customerPhone: normalizedPhone,
       customerEmail: normalizedEmail,
       facebookLink: String(facebookLink || "").trim(),
-      orderKind: "customer",
+      orderKind: "manual",
       items: [],
-      subtotal: 0,
-      total: 0,
+      subtotal: numericTotal,
+      total: numericTotal,
       note: String(note || "").trim(),
-      paymentMethod: "cod",
-      paymentStatus: "paid",
-      status: "pending",
+      paymentMethod: normalizedPaymentMethod,
+      paymentStatus: deriveManualPaymentStatus(normalizedStatus, numericTotal),
+      status: normalizedStatus,
+      createdAt: manualOrderDate || undefined,
+      updatedAt: manualOrderDate || undefined,
     });
 
     await order.save();
+
     res.status(201).json(getOrderResponse(order));
   } catch (error) {
-    console.error("Error creating manual customer order:", error);
-    res.status(400).json({ message: error.message || "Failed to create customer order" });
+    console.error("Error creating manual order:", error);
+    res.status(400).json({ message: error.message || "Failed to create manual order" });
   }
-});
+}
+
+router.post("/manual", createManualOrder);
+router.post("/manual/customer", createManualOrder);
 
 router.post("/", orderRateLimiter, async (req, res) => {
   try {
