@@ -350,6 +350,49 @@ router.get("/:id", async (req, res) => {
   }
 });
 
+router.post("/manual/customer", async (req, res) => {
+  try {
+    const {
+      customerName,
+      customerPhone,
+      customerEmail,
+      facebookLink,
+      note,
+    } = req.body || {};
+
+    const normalizedName = String(customerName || "").trim();
+    const normalizedPhone = String(customerPhone || "").trim();
+    const normalizedEmail = String(customerEmail || "").trim().toLowerCase();
+
+    if (!normalizedName || !normalizedPhone || !normalizedEmail) {
+      return res.status(400).json({
+        message: "Missing required fields: customerName, customerPhone, customerEmail",
+      });
+    }
+
+    const order = new Order({
+      customerName: normalizedName,
+      customerPhone: normalizedPhone,
+      customerEmail: normalizedEmail,
+      facebookLink: String(facebookLink || "").trim(),
+      orderKind: "customer",
+      items: [],
+      subtotal: 0,
+      total: 0,
+      note: String(note || "").trim(),
+      paymentMethod: "cod",
+      paymentStatus: "paid",
+      status: "pending",
+    });
+
+    await order.save();
+    res.status(201).json(getOrderResponse(order));
+  } catch (error) {
+    console.error("Error creating manual customer order:", error);
+    res.status(400).json({ message: error.message || "Failed to create customer order" });
+  }
+});
+
 router.post("/", orderRateLimiter, async (req, res) => {
   try {
     const {

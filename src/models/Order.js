@@ -44,14 +44,23 @@ const orderSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  orderKind: {
+    type: String,
+    enum: ["product", "customer"],
+    default: "product"
+  },
   items: {
     type: [orderItemSchema],
     required: true,
     validate: {
       validator: function(v) {
+        if (this.orderKind === "customer") {
+          return Array.isArray(v);
+        }
+
         return v && v.length > 0;
       },
-      message: "Order must have at least one item"
+      message: "Product orders must have at least one item"
     }
   },
   subtotal: {
